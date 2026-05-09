@@ -41,6 +41,7 @@ class Scheduler:
 
             # Crawl all competitors
             all_diffs = []
+            crawl_sources_map = {}  # competitor_id -> sources (for initial comprehensive analysis)
             crawl_errors = []
 
             for competitor in competitors:
@@ -49,6 +50,7 @@ class Scheduler:
 
                     # Run crawler
                     crawl_sources = crawler.crawl_competitor(competitor['name'], competitor['url'])
+                    crawl_sources_map[competitor['id']] = crawl_sources
 
                     # Store crawl result
                     crawl_result = db.create_crawl_result(
@@ -92,9 +94,10 @@ class Scheduler:
             logger.info("Generating report...")
             try:
                 report = report_generator.generate_report(
-                    business['name'],
-                    competitors,
-                    all_diffs
+                    business=business,
+                    competitors=competitors,
+                    diffs=all_diffs,
+                    crawl_sources_map=crawl_sources_map,
                 )
 
                 # Store report
