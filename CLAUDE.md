@@ -27,7 +27,7 @@ Lead Pursuits aggregates government/procurement opportunities and bids from sour
 | Language | Python 3.11 |
 | Database | Supabase PostgreSQL (free tier) |
 | Scheduler | GitHub Actions (cron daily 3 AM UTC) |
-| Crawler | requests + BeautifulSoup + feedparser (Playwright installed but not yet used heavily) |
+| Crawler | requests + BeautifulSoup + feedparser; Playwright (Chromium headless) as fallback for JS-heavy sites |
 | AI | Claude API (model: `claude-opus-4-7`) |
 | Email | Resend (free tier, 100 emails/day) |
 | CLI | Click + Rich (currently unusable on user's network — see below) |
@@ -129,16 +129,18 @@ DELETE FROM reports;
 DELETE FROM crawl_results;
 ```
 
-## Current Competitors (Lead Pursuits)
+## Competitors
 
-1. GovWin IQ (Deltek) — `https://iq.govwin.com`
-2. HigherGov — `https://www.highergov.com`
-3. GovTribe — `https://govtribe.com`
-4. Bloomberg Government — `https://about.bgov.com` (returns 403 — blocked)
-5. BidNet Direct — `https://www.bidnetdirect.com`
-6. GovDirections — `https://www.govdirections.com`
-7. Responsive (formerly RFPIO) — `https://www.responsive.io`
-8. Loopio — `https://www.loopio.com`
+Competitor lists are **stored in the Supabase `competitors` table per business**, not hardcoded anywhere in code or docs. Each business has its own list, identified either via the Claude-based competitor discovery flow or by manual entry. To inspect the current list, query:
+
+```sql
+SELECT c.name, c.url, c.is_active
+FROM competitors c
+JOIN businesses b ON c.business_id = b.id
+WHERE b.id = '<business_id>';
+```
+
+When the active business changes (e.g., a new business is added via the onboarding flow in ROADMAP #3), the competitor set changes with it. Treat any specific competitor names you see in logs or historical reports as **examples for one business at one point in time**, not as fixtures of the system.
 
 ## Crawler Behavior
 
@@ -146,8 +148,8 @@ DELETE FROM crawl_results;
 - **Respects:** Polite 2-sec delays between requests; retries 3x with exponential backoff (skips 404s immediately)
 - **What it captures per competitor:** homepage messaging, pricing tiers, features list, blog posts (RSS preferred), job listings
 - **Known limitations:**
-  - Some sites block bots (Bloomberg Government returns 403)
-  - JavaScript-heavy SPAs may return empty HTML (Playwright is installed but not yet integrated)
+  - Some sites block bots and return 403 (recorded as `status: "blocked"` in crawl_results)
+  - JavaScript-heavy SPAs are handled via Playwright fallback (added in ROADMAP #1A)
   - News crawling is a placeholder (no API integrated)
   - LinkedIn and review sites (G2, Capterra) not yet implemented
 

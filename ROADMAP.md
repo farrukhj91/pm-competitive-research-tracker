@@ -13,7 +13,7 @@
 **Goal:** Capture more reliable, richer competitor data so AI analysis quality improves.
 
 #### 1A. Playwright for JS-heavy sites
-**Problem:** Modern SPAs (HigherGov, Responsive.io, GovTribe) render content via JavaScript. Our current `requests + BeautifulSoup` approach gets empty/incomplete HTML on these sites.
+**Problem:** Modern SPAs (any JavaScript-heavy site) render content client-side. The default `requests + BeautifulSoup` approach gets empty/incomplete HTML on these sites. This problem is competitor-agnostic — it depends on the site's tech stack, not on which business is being tracked.
 
 **Solution:**
 - Add Playwright (already installed) to render JS before parsing
@@ -31,9 +31,10 @@
 - `.github/workflows/daily_crawl.yml` — already installs chromium
 
 **Acceptance:**
-- HigherGov, GovTribe, Responsive.io now return features/pricing content
-- No more empty `"features": []` in crawl_results for these sites
+- Any JS-heavy competitor site (for any business) now returns features/pricing content
+- No more empty `"features": []` in crawl_results when the source HTML is server-rendered thin
 - Crawl time per competitor doesn't exceed 60 seconds
+- Detection logic is generic — driven by HTML heuristics, not by hardcoded domain lists
 
 ---
 
@@ -225,7 +226,7 @@ Sort by confidence descending. Include 6-8 direct competitors (high confidence) 
 - Insert business + competitors into Supabase
 - Call GitHub Actions workflow_dispatch with `business_id` parameter
 - Poll Supabase for crawl_results status
-- Show progress: "Crawling Apollo.io (2/8)..."
+- Show progress: "Crawling {competitor_name} (2/8)..."
 - When done, show summary card + link to full report
 
 #### Backend Changes
@@ -311,7 +312,7 @@ CREATE POLICY "Users see own competitors" ON competitors
 - Slack app + OAuth
 - User connects Slack workspace per business
 - Choose channel for notifications
-- Send key changes to channel (e.g., "🚨 Apollo.io raised prices 20%")
+- Send key changes to channel (e.g., "🚨 {competitor_name} raised prices 20%")
 - Configurable thresholds (what counts as "important")
 - Optional: full daily summary message
 - **Files:** `src/slack_sender.py`, `.env` add `SLACK_BOT_TOKEN`
