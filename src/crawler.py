@@ -1,12 +1,14 @@
 import logging
 import time
 import re
+import asyncio
 from typing import Optional, Dict, Any, List
 from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 import feedparser
+from playwright.async_api import async_playwright
 
 from src.config import CRAWL_TIMEOUT_SECONDS, CRAWL_DELAY_SECONDS, MAX_RETRIES
 
@@ -30,6 +32,7 @@ class Crawler:
         })
         self.timeout = CRAWL_TIMEOUT_SECONDS
         self.delay = CRAWL_DELAY_SECONDS
+        self.playwright_timeout = 40000  # milliseconds for Playwright operations
 
     def crawl_competitor(self, competitor_name: str, competitor_url: str) -> Dict[str, Any]:
         """
@@ -66,13 +69,90 @@ class Crawler:
         logger.info(f"Completed crawl for {competitor_name}")
         return sources
 
+    def _is_javascript_heavy(self, html: str) -> bool:
+        """
+        Detect if HTML appears to be JavaScript-heavy (SPA).
+        Heuristics:
+        - Body text suspiciously short (< 200 chars after removing scripts)
+        - Many <script> tags relative to other content
+        """
+        soup = BeautifulSoup(html, "html.parser")
+
+        # Remove scripts and styles
+        for script in soup(["script", "style"]):
+            script.decompose()
+
+        # Extract body text
+        body_text = " ".join(soup.stripped_strings)
+        text_length = len(body_text)
+
+        # Count script tags (from original HTML before decomposing)
+        script_count = html.count("<script")
+
+        # If body text is too short, likely needs JS rendering
+        if text_length < 200:
+            logger.debug(f"Detected JS-heavy page: body text only {text_length} chars")
+            return True
+
+        # If many scripts relative to content, likely JS-heavy
+        if script_count > 5 and text_length < 1000:
+            logger.debug(f"Detected JS-heavy page: {script_count} scripts with only {text_length} chars text")
+            return True
+
+        return False
+
+    async def _render_with_playwright(self, url: str) -> Optional[str]:
+        """
+        Render a page using Playwright (Chromium headless).
+        Waits for network idle before extracting content.
+        """
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                )
+                page = await context.new_page()
+
+                await page.goto(url, wait_until="networkidle", timeout=self.playwright_timeout)
+
+                # Get rendered HTML
+                html = await page.content()
+
+                await context.close()
+                await browser.close()
+
+                return html
+        except Exception as e:
+            logger.warning(f"Playwright rendering failed for {url}: {e}")
+            return None
+
+    def _crawl_with_playwright(self, url: str) -> Optional[str]:
+        """Wrapper to run async Playwright in sync context."""
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(self._render_with_playwright(url))
+            loop.close()
+            return result
+        except Exception as e:
+            logger.warning(f"Failed to run Playwright for {url}: {e}")
+            return None
+
     def _crawl_with_retry(self, url: str, method: str = "GET") -> Optional[str]:
-        """Fetch a URL with retry logic. Don't retry 404s."""
+        """
+        Fetch a URL with retry logic. Don't retry 404s.
+        Falls back to Playwright if static fetch returns JS-heavy content.
+        """
+        html = None
+
+        # Try static fetch with retries
         for attempt in range(MAX_RETRIES):
             try:
                 response = self.session.request(method, url, timeout=self.timeout, allow_redirects=True)
                 if response.status_code == 200:
-                    return response.text
+                    html = response.text
+                    break
                 elif response.status_code in (403, 401):
                     logger.warning(f"Access forbidden for {url} (status: {response.status_code})")
                     return None
@@ -88,7 +168,20 @@ class Crawler:
             if attempt < MAX_RETRIES - 1:
                 wait = 2 ** attempt
                 time.sleep(wait)
-        return None
+
+        # If we got HTML, check if it's JS-heavy
+        if html:
+            if self._is_javascript_heavy(html):
+                logger.info(f"Detected JS-heavy content for {url}, falling back to Playwright")
+                playwright_html = self._crawl_with_playwright(url)
+                if playwright_html:
+                    html = playwright_html
+        else:
+            # Static fetch completely failed, try Playwright as last resort
+            logger.info(f"Static fetch failed for {url}, trying Playwright")
+            html = self._crawl_with_playwright(url)
+
+        return html
 
     def _discover_links(self, html: str, base_url: str) -> Dict[str, str]:
         """Parse HTML to find navigation links matching keyword categories."""
