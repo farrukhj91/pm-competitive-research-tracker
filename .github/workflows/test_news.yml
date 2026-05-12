@@ -1,0 +1,56 @@
+name: Test News Crawler (ROADMAP #1B)
+
+# Manual-only. Prints news fetch results for the given input(s) to the workflow log.
+# Does not write to DB, does not call Claude, does not send email.
+
+on:
+  workflow_dispatch:
+    inputs:
+      competitor_name:
+        description: 'Optional: test a single arbitrary name (e.g. "Slack"). If set, business_id is ignored.'
+        required: false
+        type: string
+      business_id:
+        description: 'Optional: UUID of a business to restrict to. If both inputs are blank, tests all active competitors across all businesses.'
+        required: false
+        type: string
+
+jobs:
+  test-news:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run news test
+        env:
+          # Only required when no competitor_name is supplied (DB mode)
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          # The crawler module imports config, which expects these but doesn't validate
+          # for this script — set dummies so import succeeds.
+          CLAUDE_API_KEY: "not-used-in-this-test"
+          RESEND_API_KEY: "not-used-in-this-test"
+          LOG_LEVEL: INFO
+        run: |
+          set -e
+          NAME="${{ github.event.inputs.competitor_name }}"
+          BUSINESS_ID="${{ github.event.inputs.business_id }}"
+          if [ -n "$NAME" ]; then
+            python -m scripts.test_news "$NAME"
+          elif [ -n "$BUSINESS_ID" ]; then
+            python -m scripts.test_news --business-id "$BUSINESS_ID"
+          else
+            python -m scripts.test_news
+          fi
