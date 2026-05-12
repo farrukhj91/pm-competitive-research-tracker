@@ -208,8 +208,35 @@ class DiffEngine:
         return changes if changes else {"status": "no_changes"}
 
     def _diff_news(self, prev: Dict[str, Any], curr: Dict[str, Any]) -> Dict[str, Any]:
-        """Diff news mention changes."""
-        # Placeholder - news crawling not implemented yet
-        return {"status": "not_implemented"}
+        """
+        Diff news mentions: identify articles that appear in the current crawl
+        but were not in the previous one. Identity is article URL (with title
+        as a fallback if URL is missing).
+        """
+        prev_articles = prev.get("articles", []) if isinstance(prev.get("articles"), list) else []
+        curr_articles = curr.get("articles", []) if isinstance(curr.get("articles"), list) else []
+
+        def article_key(a: Dict[str, Any]) -> str:
+            return a.get("url") or a.get("title", "")
+
+        prev_keys = {article_key(a) for a in prev_articles if article_key(a)}
+        new_articles = [a for a in curr_articles if article_key(a) and article_key(a) not in prev_keys]
+
+        if not new_articles:
+            return {"status": "no_changes"}
+
+        return {
+            "new_articles": [
+                {
+                    "title": a.get("title", ""),
+                    "source": a.get("source", ""),
+                    "url": a.get("url", ""),
+                    "published": a.get("published", ""),
+                    "snippet": a.get("snippet", ""),
+                }
+                for a in new_articles[:10]
+            ],
+            "new_article_count": len(new_articles),
+        }
 
 diff_engine = DiffEngine()

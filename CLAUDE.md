@@ -150,7 +150,7 @@ When the active business changes (e.g., a new business is added via the onboardi
 - **Known limitations:**
   - Some sites block bots and return 403 (recorded as `status: "blocked"` in crawl_results)
   - JavaScript-heavy SPAs are handled via Playwright fallback (added in ROADMAP #1A)
-  - News crawling is a placeholder (no API integrated)
+  - News crawling uses Google News RSS — no API key, but headlines depend on Google's indexing (added in ROADMAP #1B)
   - LinkedIn and review sites (G2, Capterra) not yet implemented
 
 ## Report Generator Logic

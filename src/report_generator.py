@@ -117,6 +117,14 @@ class ReportGenerator:
                         titles = [p.get("title", "") for p in posts[:3]]
                         context_parts.append(f"Recent Blog Posts: {titles}")
 
+            # News mentions
+            news = sources.get("news", {})
+            if news.get("status") == "success":
+                articles = news.get("articles", [])
+                if articles:
+                    headlines = [f"{a.get('title', '')} ({a.get('source', 'unknown')})" for a in articles[:5]]
+                    context_parts.append(f"Recent News Mentions: {headlines}")
+
         context = "\n".join(context_parts)
 
         prompt = f"""You are a senior competitive intelligence analyst creating an initial deep-dive competitive analysis report.
@@ -616,7 +624,20 @@ Important rules:
                     html += f"""            <div class="change-item">
                 <strong>{source_type.upper()}:</strong><br/>
 """
-                    if isinstance(source_changes, dict):
+                    # Special-case news so we render readable headlines + links
+                    if source_type == "news" and isinstance(source_changes, dict) and source_changes.get("new_articles"):
+                        for art in source_changes["new_articles"]:
+                            title = art.get("title", "")
+                            url = art.get("url", "")
+                            source = art.get("source", "")
+                            published = art.get("published", "")
+                            meta_bits = [b for b in [source, published] if b]
+                            meta = f" — <em>{' · '.join(meta_bits)}</em>" if meta_bits else ""
+                            if url:
+                                html += f'                • <a href="{url}">{title}</a>{meta}<br/>\n'
+                            else:
+                                html += f"                • {title}{meta}<br/>\n"
+                    elif isinstance(source_changes, dict):
                         for key, value in source_changes.items():
                             if key != "status":
                                 html += f"                {key}: {json.dumps(value)[:200]}...<br/>\n"
@@ -740,6 +761,18 @@ Important rules:
                         blog_changes = changes["blog"]
                         if "new_posts" in blog_changes:
                             bullets.append(f"{len(blog_changes['new_posts'])} new blog posts")
+                    if "news" in changes:
+                        news_changes = changes["news"]
+                        if "new_articles" in news_changes:
+                            article_count = news_changes.get("new_article_count", len(news_changes["new_articles"]))
+                            # Surface the most recent headline for context
+                            first = news_changes["new_articles"][0]
+                            headline = first.get("title", "")[:80]
+                            source = first.get("source", "")
+                            bullets.append(
+                                f"{article_count} new news mention(s) — e.g., \"{headline}\""
+                                + (f" ({source})" if source else "")
+                            )
 
             insights.append({
                 "name": comp.get("name", "Unknown"),

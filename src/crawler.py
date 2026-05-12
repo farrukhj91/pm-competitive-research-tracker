@@ -2,8 +2,9 @@ import logging
 import time
 import re
 import asyncio
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, quote_plus
 
 import requests
 from bs4 import BeautifulSoup
@@ -441,12 +442,88 @@ class Crawler:
 
         return {"status": "not_found", "reason": "Could not find jobs page"}
 
-    def _crawl_news(self, company_name: str) -> Dict[str, Any]:
-        """News crawling placeholder."""
+    def _crawl_news(self, company_name: str, lookback_hours: int = 48, max_articles: int = 10) -> Dict[str, Any]:
+        """
+        Fetch recent news mentions via Google News RSS (no API key required).
+        Returns articles from the last `lookback_hours` window (default 48h to allow
+        some slack around the daily crawl cadence).
+        """
+        if not company_name:
+            return {"status": "not_found", "reason": "No company name provided"}
+
+        query = quote_plus(f'"{company_name}"')
+        rss_url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+
+        try:
+            feed = feedparser.parse(rss_url)
+        except Exception as e:
+            logger.warning(f"News RSS fetch failed for {company_name}: {e}")
+            return {"status": "failed", "reason": str(e)}
+
+        if not feed.entries:
+            return {
+                "status": "success",
+                "url": rss_url,
+                "articles": [],
+                "crawled_at": time.time(),
+            }
+
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+        articles = []
+
+        for entry in feed.entries:
+            published_dt = self._parse_feed_date(entry)
+
+            # Skip articles older than the cutoff (when we can parse the date)
+            if published_dt and published_dt < cutoff:
+                continue
+
+            # Google News RSS embeds source name in <source> element or in title suffix
+            source_name = ""
+            if hasattr(entry, "source") and entry.source:
+                source_name = entry.source.get("title", "") if isinstance(entry.source, dict) else str(entry.source)
+
+            title = entry.get("title", "Untitled")
+            # Google News titles often end with " - {Source}" — split it out as a fallback
+            if not source_name and " - " in title:
+                title, source_name = title.rsplit(" - ", 1)
+
+            articles.append({
+                "title": title.strip(),
+                "source": source_name.strip() if source_name else "",
+                "published": entry.get("published", ""),
+                "url": entry.get("link", ""),
+                "snippet": self._strip_html(entry.get("summary", ""))[:300],
+            })
+
+            if len(articles) >= max_articles:
+                break
+
         return {
-            "status": "not_implemented",
-            "reason": "News crawling requires API integration",
-            "note": f"To enable, integrate Google News API or similar for: {company_name}",
+            "status": "success",
+            "url": rss_url,
+            "articles": articles,
+            "lookback_hours": lookback_hours,
+            "crawled_at": time.time(),
         }
+
+    def _parse_feed_date(self, entry) -> Optional[datetime]:
+        """Best-effort parse of a feed entry's published date as a UTC datetime."""
+        parsed = entry.get("published_parsed") or entry.get("updated_parsed")
+        if parsed:
+            try:
+                return datetime(*parsed[:6], tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _strip_html(self, raw: str) -> str:
+        """Strip HTML tags from a snippet (Google News summaries often contain anchor tags)."""
+        if not raw:
+            return ""
+        try:
+            return BeautifulSoup(raw, "html.parser").get_text(" ", strip=True)
+        except Exception:
+            return raw
 
 crawler = Crawler()
