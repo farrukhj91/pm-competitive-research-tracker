@@ -6,6 +6,28 @@
 
 ---
 
+## Core Principles (read before working on any feature)
+
+These principles govern the system's design. Any code or doc change that contradicts them is a bug.
+
+1. **Multi-tenant by design.** The system supports many users, each tracking one or more businesses. There is no canonical user, no canonical business, and no canonical competitor list. The current Lead Pursuits setup in Supabase is **seed data for development**, not a fixture.
+
+2. **Competitors are discovered dynamically per business — never hardcoded.**
+   - User inputs business name + URL + description.
+   - Claude performs deep research and returns 8–12 candidate competitors with confidence scores and overlap reasoning.
+   - User selects which ones to track (default: top N pre-checked, but user can add/remove).
+   - Selected competitors are written to the Supabase `competitors` table for that business.
+   - From there, the daily crawler operates on whatever rows exist for each business.
+   - **No code path, no doc, no test fixture, and no example should assume a specific competitor by name.** The full onboarding flow is specified in `#3` below.
+
+3. **Per-business isolation.** A user's businesses, competitors, crawl data, and reports belong only to them. When auth/RLS lands (`#3`), policies must enforce this at the DB level.
+
+4. **Crawler and analysis logic must be competitor-agnostic.** Detection heuristics (e.g., the JS-heavy fallback in `#1A`) operate on HTML structure, not on domain allowlists. AI analysis prompts reference competitors by variable, not by name.
+
+5. **Documentation discipline.** When an example competitor is needed for clarity, frame it as *"e.g., for one of the current Lead Pursuits competitors"* or use a placeholder like `{competitor_name}` — never as a canonical case.
+
+---
+
 ## Phase 2 — Priority Features (Active)
 
 ### #1 — Better Crawling (Playwright + News API + LinkedIn)
