@@ -151,7 +151,8 @@ When the active business changes (e.g., a new business is added via the onboardi
   - Some sites block bots and return 403 (recorded as `status: "blocked"` in crawl_results)
   - JavaScript-heavy SPAs are handled via Playwright fallback (added in ROADMAP #1A)
   - News crawling uses Google News RSS — no API key, but headlines depend on Google's indexing (added in ROADMAP #1B)
-  - LinkedIn and review sites (G2, Capterra) not yet implemented
+  - LinkedIn crawling (ROADMAP #1C): tries explicit `competitors.linkedin_url` first, falls back to Google search scrape for `site:linkedin.com/company "{name}"`. LinkedIn aggressively blocks scrapers, so failures are graceful (`status: "blocked"`) with a prompt to set `linkedin_url` manually. Schema migration: `migrations/001_add_linkedin_url.sql` (run in Supabase SQL Editor).
+  - Review sites (G2, Capterra) not yet implemented
 
 ## Report Generator Logic
 

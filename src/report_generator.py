@@ -125,6 +125,19 @@ class ReportGenerator:
                     headlines = [f"{a.get('title', '')} ({a.get('source', 'unknown')})" for a in articles[:5]]
                     context_parts.append(f"Recent News Mentions: {headlines}")
 
+            # LinkedIn signals
+            linkedin = sources.get("linkedin", {})
+            if linkedin.get("status") == "success":
+                emp = linkedin.get("employee_count")
+                fol = linkedin.get("follower_count")
+                bits = []
+                if emp:
+                    bits.append(f"employees: {emp}")
+                if fol:
+                    bits.append(f"followers: {fol}")
+                if bits:
+                    context_parts.append(f"LinkedIn: {', '.join(bits)}")
+
         context = "\n".join(context_parts)
 
         prompt = f"""You are a senior competitive intelligence analyst creating an initial deep-dive competitive analysis report.
@@ -772,6 +785,18 @@ Important rules:
                             bullets.append(
                                 f"{article_count} new news mention(s) — e.g., \"{headline}\""
                                 + (f" ({source})" if source else "")
+                            )
+                    if "linkedin" in changes:
+                        li_changes = changes["linkedin"]
+                        if "employee_count_changed" in li_changes:
+                            ec = li_changes["employee_count_changed"]
+                            bullets.append(
+                                f"LinkedIn headcount signal: {ec.get('previous') or '—'} → {ec.get('current') or '—'}"
+                            )
+                        if "follower_count_changed" in li_changes:
+                            fc = li_changes["follower_count_changed"]
+                            bullets.append(
+                                f"LinkedIn followers: {fc.get('previous') or '—'} → {fc.get('current') or '—'}"
                             )
 
             insights.append({

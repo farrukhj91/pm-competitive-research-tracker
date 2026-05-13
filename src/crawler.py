@@ -35,10 +35,17 @@ class Crawler:
         self.delay = CRAWL_DELAY_SECONDS
         self.playwright_timeout = 40000  # milliseconds for Playwright operations
 
-    def crawl_competitor(self, competitor_name: str, competitor_url: str) -> Dict[str, Any]:
+    def crawl_competitor(
+        self,
+        competitor_name: str,
+        competitor_url: str,
+        linkedin_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Crawl a competitor and extract all available data.
         Strategy: Fetch homepage → discover real URLs from nav → crawl each.
+        If linkedin_url is provided, the crawler uses it directly for LinkedIn data;
+        otherwise it falls back to Google search discovery.
         """
         logger.info(f"Starting crawl for {competitor_name} ({competitor_url})")
 
@@ -66,6 +73,9 @@ class Crawler:
         time.sleep(self.delay)
 
         sources["news"] = self._crawl_news(competitor_name)
+        time.sleep(self.delay)
+
+        sources["linkedin"] = self._crawl_linkedin(competitor_name, linkedin_url)
 
         logger.info(f"Completed crawl for {competitor_name}")
         return sources
@@ -525,5 +535,129 @@ class Crawler:
             return BeautifulSoup(raw, "html.parser").get_text(" ", strip=True)
         except Exception:
             return raw
+
+    # ----- LinkedIn (ROADMAP #1C) -----
+    # LinkedIn aggressively blocks scrapers. Strategy, in order of preference:
+    #   1. If user supplied a linkedin_url, fetch that page directly (often returns
+    #      meta tags / og:description with employee count before the auth wall).
+    #   2. Otherwise, scrape Google search results for `site:linkedin.com/company "{name}"`
+    #      — extract the LinkedIn URL and any employee count in the snippet.
+    #   3. If both fail, mark status:"blocked" with a note suggesting manual linkedin_url entry.
+
+    # Match phrases like "1,234 employees", "11-50 employees", "10K+ employees on LinkedIn"
+    LINKEDIN_EMPLOYEE_RE = re.compile(
+        r"([\d,]+(?:\s*[-–]\s*[\d,]+)?(?:\.\d+)?[KkMm]?\+?)\s*(?:employees?|people who work here)",
+        re.IGNORECASE,
+    )
+    LINKEDIN_FOLLOWER_RE = re.compile(
+        r"([\d,]+(?:\.\d+)?[KkMm]?\+?)\s*followers?",
+        re.IGNORECASE,
+    )
+    LINKEDIN_COMPANY_URL_RE = re.compile(
+        r"https?://(?:[a-z]{2,3}\.)?linkedin\.com/company/[a-zA-Z0-9._%+\-/]+",
+        re.IGNORECASE,
+    )
+
+    def _crawl_linkedin(self, company_name: str, linkedin_url: Optional[str] = None) -> Dict[str, Any]:
+        """Extract LinkedIn company signals (employee count, followers, URL)."""
+        if not company_name:
+            return {"status": "not_found", "reason": "No company name provided"}
+
+        # Path 1: explicit URL — try direct fetch first
+        if linkedin_url:
+            direct = self._linkedin_via_direct_fetch(linkedin_url)
+            if direct and direct.get("status") == "success":
+                direct["source_strategy"] = "direct_fetch"
+                return direct
+            # Fall through to Google if direct fetch yielded nothing usable
+
+        # Path 2: Google search discovery
+        via_google = self._linkedin_via_google(company_name)
+        if via_google and via_google.get("status") == "success":
+            via_google["source_strategy"] = "google_search"
+            return via_google
+
+        # Path 3: blocked
+        return {
+            "status": "blocked",
+            "reason": "Could not discover LinkedIn data via direct fetch or Google search",
+            "note": (
+                "LinkedIn blocks scrapers. To make this competitor's LinkedIn data reliable, "
+                "set the `linkedin_url` column on the competitors row in Supabase."
+            ),
+            "crawled_at": time.time(),
+        }
+
+    def _linkedin_via_direct_fetch(self, linkedin_url: str) -> Optional[Dict[str, Any]]:
+        """Try fetching the LinkedIn company page directly. Often returns auth-wall HTML,
+        but meta tags / og:description usually contain employee count regardless."""
+        html = self._crawl_with_retry(linkedin_url)
+        if not html:
+            return None
+
+        soup = BeautifulSoup(html, "html.parser")
+
+        # Look in og:description, meta description, and visible text
+        candidate_texts = []
+        for meta_name in [("property", "og:description"), ("name", "description")]:
+            tag = soup.find("meta", attrs={meta_name[0]: meta_name[1]})
+            if tag and tag.get("content"):
+                candidate_texts.append(tag["content"])
+
+        candidate_texts.append(" ".join(soup.stripped_strings)[:2000])
+
+        employees, followers = self._extract_linkedin_counts(" \n ".join(candidate_texts))
+        if not employees and not followers:
+            return None
+
+        return {
+            "status": "success",
+            "url": linkedin_url,
+            "employee_count": employees,
+            "follower_count": followers,
+            "crawled_at": time.time(),
+        }
+
+    def _linkedin_via_google(self, company_name: str) -> Optional[Dict[str, Any]]:
+        """Scrape Google search results for `site:linkedin.com/company "{name}"`."""
+        query = quote_plus(f'site:linkedin.com/company "{company_name}"')
+        search_url = f"https://www.google.com/search?q={query}&hl=en"
+
+        html = self._crawl_with_retry(search_url)
+        if not html:
+            return None
+
+        # Look for any LinkedIn company URL in the page
+        url_match = self.LINKEDIN_COMPANY_URL_RE.search(html)
+        discovered_url = url_match.group(0) if url_match else None
+
+        # Search the full visible text for employee/follower counts
+        soup = BeautifulSoup(html, "html.parser")
+        for script in soup(["script", "style"]):
+            script.decompose()
+        page_text = " ".join(soup.stripped_strings)
+
+        employees, followers = self._extract_linkedin_counts(page_text)
+
+        if not discovered_url and not employees and not followers:
+            return None
+
+        return {
+            "status": "success",
+            "url": discovered_url,
+            "employee_count": employees,
+            "follower_count": followers,
+            "crawled_at": time.time(),
+        }
+
+    def _extract_linkedin_counts(self, text: str) -> tuple[Optional[str], Optional[str]]:
+        """Pull the first employee count and follower count from a blob of text."""
+        if not text:
+            return None, None
+        emp_match = self.LINKEDIN_EMPLOYEE_RE.search(text)
+        fol_match = self.LINKEDIN_FOLLOWER_RE.search(text)
+        employees = emp_match.group(1).strip() if emp_match else None
+        followers = fol_match.group(1).strip() if fol_match else None
+        return employees, followers
 
 crawler = Crawler()

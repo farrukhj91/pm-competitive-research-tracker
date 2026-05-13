@@ -53,6 +53,8 @@ class DiffEngine:
                 changes[source_type] = self._diff_jobs(previous_source, current_source)
             elif source_type == "news":
                 changes[source_type] = self._diff_news(previous_source, current_source)
+            elif source_type == "linkedin":
+                changes[source_type] = self._diff_linkedin(previous_source, current_source)
 
         return {
             "is_first_crawl": False,
@@ -204,6 +206,32 @@ class DiffEngine:
         new_jobs = list(curr_jobs - prev_jobs)
         if new_jobs:
             changes["new_jobs"] = new_jobs[:5]
+
+        return changes if changes else {"status": "no_changes"}
+
+    def _diff_linkedin(self, prev: Dict[str, Any], curr: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Diff LinkedIn signals — employee count and follower count.
+        Counts are stored as strings (e.g., "11-50", "1,234", "10K+") because
+        LinkedIn formats vary. We compare them as strings; any change is reported.
+        """
+        changes = {}
+
+        prev_emp = prev.get("employee_count")
+        curr_emp = curr.get("employee_count")
+        if prev_emp != curr_emp and (prev_emp or curr_emp):
+            changes["employee_count_changed"] = {
+                "previous": prev_emp,
+                "current": curr_emp,
+            }
+
+        prev_fol = prev.get("follower_count")
+        curr_fol = curr.get("follower_count")
+        if prev_fol != curr_fol and (prev_fol or curr_fol):
+            changes["follower_count_changed"] = {
+                "previous": prev_fol,
+                "current": curr_fol,
+            }
 
         return changes if changes else {"status": "no_changes"}
 

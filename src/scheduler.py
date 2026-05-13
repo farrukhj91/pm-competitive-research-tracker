@@ -49,7 +49,11 @@ class Scheduler:
                     logger.info(f"Crawling {competitor['name']} ({competitor['url']})")
 
                     # Run crawler
-                    crawl_sources = crawler.crawl_competitor(competitor['name'], competitor['url'])
+                    crawl_sources = crawler.crawl_competitor(
+                        competitor['name'],
+                        competitor['url'],
+                        linkedin_url=competitor.get('linkedin_url'),
+                    )
                     crawl_sources_map[competitor['id']] = crawl_sources
 
                     # Store crawl result
