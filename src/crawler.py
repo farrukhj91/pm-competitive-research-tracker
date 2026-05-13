@@ -23,6 +23,83 @@ PAGE_KEYWORDS = {
     "jobs": ["careers", "jobs", "join-us", "team", "open positions", "openings", "we're hiring"],
 }
 
+# --- Extraction quality filters (added after #1A Playwright surfaced full-DOM noise) ---
+
+# Zero-width / invisible unicode characters that LinkedIn-style decorators inject into
+# pricing tier names (e.g., "Growth Plus️‍Popular"). Stripped on extraction.
+INVISIBLE_UNICODE_RE = re.compile(r"[​-‍️⁠]")
+
+# A list with entries like "Algeria+213", "Andorra+376" is the country-code dropdown
+# of a signup/contact form — discard the whole list, it's not features.
+PHONE_COUNTRY_CODE_RE = re.compile(r"^[A-Z][a-zA-Z\.\s]+\+\d{1,4}$")
+
+# Phrases that are CTAs / nav / form labels, not product features.
+FEATURE_NOISE_PHRASES = {
+    "sign up", "sign in", "log in", "login", "get started", "get a demo", "book a demo",
+    "request a demo", "schedule a demo", "contact sales", "contact us", "try for free",
+    "start free trial", "free trial", "pricing", "features", "blog", "about us",
+    "careers", "terms", "privacy", "cookie policy", "learn more", "read more",
+    "see more", "view all", "express your interest",
+}
+
+# A real job title almost always contains one of these role words. This filter is
+# imperfect (will miss exotic titles) but eliminates the vast majority of CTA junk.
+JOB_ROLE_WORDS_RE = re.compile(
+    r"\b(engineer|developer|architect|manager|director|lead|head|chief|officer|"
+    r"vp|president|analyst|specialist|consultant|designer|researcher|scientist|"
+    r"administrator|coordinator|associate|assistant|representative|"
+    r"executive|strategist|writer|editor|producer|technician|"
+    r"sales|marketing|product|engineering|finance|legal|hr|recruiter|"
+    r"intern|founder|partner|principal|advocate)\b",
+    re.IGNORECASE,
+)
+
+# Phrases that disqualify a string from being a job title even if it contains a role word.
+JOB_NOISE_PHRASES = {
+    "free trial", "get a demo", "book a demo", "sign up", "express your interest",
+    "start your free trial", "learn more", "contact sales", "contact us", "see all jobs",
+    "view all positions", "open positions",
+}
+
+
+def _clean_tier_name(name: str) -> str:
+    """Strip invisible unicode characters and collapse whitespace."""
+    cleaned = INVISIBLE_UNICODE_RE.sub("", name)
+    return " ".join(cleaned.split())
+
+
+def _is_phone_code_list(items: list) -> bool:
+    """True if a list looks like a country-code phone dropdown."""
+    if len(items) < 3:
+        return False
+    matches = sum(1 for it in items if PHONE_COUNTRY_CODE_RE.match(it))
+    # Even a handful of country-code matches signals this is the dropdown
+    return matches >= 3
+
+
+def _looks_like_feature(text: str) -> bool:
+    """Heuristic to filter form/nav junk out of feature lists."""
+    if not text or len(text) < 10 or len(text) > 200:
+        return False
+    lower = text.lower().strip()
+    if lower in FEATURE_NOISE_PHRASES:
+        return False
+    if PHONE_COUNTRY_CODE_RE.match(text):
+        return False
+    return True
+
+
+def _looks_like_job_title(text: str) -> bool:
+    """Heuristic to filter CTAs and marketing copy out of job lists."""
+    if not text or len(text) < 8 or len(text) > 120:
+        return False
+    lower = text.lower().strip()
+    if any(noise in lower for noise in JOB_NOISE_PHRASES):
+        return False
+    if not JOB_ROLE_WORDS_RE.search(text):
+        return False
+    return True
+
 class Crawler:
     def __init__(self):
         self.session = requests.Session()
@@ -292,14 +369,23 @@ class Crawler:
                     script.decompose()
 
                 tiers = []
-                for tier in soup.find_all(["div", "section", "article"], class_=re.compile(r"(tier|plan|pricing|package)", re.I))[:10]:
-                    tier_name = tier.find(["h2", "h3", "h4"])
-                    tier_price = tier.find(["span", "div", "p"], class_=re.compile(r"price|amount|cost", re.I))
-                    if tier_name or tier_price:
-                        tiers.append({
-                            "name": tier_name.get_text(strip=True) if tier_name else "Unknown",
-                            "price": tier_price.get_text(strip=True)[:50] if tier_price else "Contact",
-                        })
+                seen_names = set()  # dedupe by normalized name
+                for tier in soup.find_all(["div", "section", "article"], class_=re.compile(r"(tier|plan|pricing|package)", re.I))[:20]:
+                    tier_name_el = tier.find(["h2", "h3", "h4"])
+                    tier_price_el = tier.find(["span", "div", "p"], class_=re.compile(r"price|amount|cost", re.I))
+                    if not (tier_name_el or tier_price_el):
+                        continue
+
+                    name = _clean_tier_name(tier_name_el.get_text(strip=True)) if tier_name_el else "Unknown"
+                    price = tier_price_el.get_text(strip=True)[:50] if tier_price_el else "Contact"
+
+                    # Dedupe: skip if we've already seen this tier name (case-insensitive)
+                    key = name.lower()
+                    if key in seen_names:
+                        continue
+                    seen_names.add(key)
+
+                    tiers.append({"name": name, "price": price})
 
                 content_text = " ".join(soup.stripped_strings)[:1500]
 
@@ -330,16 +416,31 @@ class Crawler:
                 for script in soup(["script", "style"]):
                     script.decompose()
 
+                # Group <li> items by parent <ul>/<ol> so we can discard whole lists
+                # that look like country-code dropdowns or other form widgets.
                 features = []
-                for li in soup.find_all("li")[:30]:
-                    text = li.get_text(strip=True)
-                    if text and 5 < len(text) < 200:
+                seen = set()
+                for parent in soup.find_all(["ul", "ol"])[:50]:
+                    items = [li.get_text(strip=True) for li in parent.find_all("li", recursive=False)]
+                    if _is_phone_code_list(items):
+                        continue  # whole list is a phone-country dropdown
+                    for text in items:
+                        if not _looks_like_feature(text):
+                            continue
+                        key = text.lower()
+                        if key in seen:
+                            continue
+                        seen.add(key)
                         features.append(text)
+                        if len(features) >= 30:
+                            break
+                    if len(features) >= 30:
+                        break
 
                 headings = []
                 for h in soup.find_all(["h2", "h3"])[:15]:
                     text = h.get_text(strip=True)
-                    if text and len(text) < 100:
+                    if text and len(text) < 100 and text.lower() not in FEATURE_NOISE_PHRASES:
                         headings.append(text)
 
                 content_text = " ".join(soup.stripped_strings)[:1500]
@@ -438,19 +539,27 @@ class Crawler:
                     script.decompose()
 
                 jobs = []
-                for job_item in soup.find_all(["div", "li", "article"], class_=re.compile(r"(job|position|opening|role|career)", re.I))[:30]:
+                seen_jobs = set()
+
+                def _add_job(text: str):
+                    if not _looks_like_job_title(text):
+                        return
+                    key = text.lower().strip()
+                    if key in seen_jobs:
+                        return
+                    seen_jobs.add(key)
+                    jobs.append(text)
+
+                for job_item in soup.find_all(["div", "li", "article"], class_=re.compile(r"(job|position|opening|role|career)", re.I))[:50]:
                     job_title = job_item.find(["h3", "h2", "h4", "a"])
                     if job_title:
-                        text = job_title.get_text(strip=True)
-                        if text and 5 < len(text) < 150:
-                            jobs.append(text)
+                        _add_job(job_title.get_text(strip=True))
 
                 if not jobs:
-                    for link in soup.find_all("a", href=True)[:50]:
-                        text = link.get_text(strip=True)
+                    for link in soup.find_all("a", href=True)[:100]:
                         href = link["href"].lower()
-                        if (5 < len(text) < 150) and any(kw in href for kw in ["job", "career", "position"]):
-                            jobs.append(text)
+                        if any(kw in href for kw in ["job", "career", "position"]):
+                            _add_job(link.get_text(strip=True))
 
                 return {
                     "status": "success",
