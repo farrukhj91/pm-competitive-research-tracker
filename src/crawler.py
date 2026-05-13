@@ -150,10 +150,17 @@ class Crawler:
             logger.warning(f"Failed to run Playwright for {url}: {e}")
             return None
 
-    def _crawl_with_retry(self, url: str, method: str = "GET") -> Optional[str]:
+    def _crawl_with_retry(
+        self,
+        url: str,
+        method: str = "GET",
+        use_playwright_fallback: bool = True,
+    ) -> Optional[str]:
         """
         Fetch a URL with retry logic. Don't retry 404s.
-        Falls back to Playwright if static fetch returns JS-heavy content.
+        Falls back to Playwright if static fetch returns JS-heavy content,
+        unless use_playwright_fallback=False (used for sites where Playwright
+        provides no benefit, e.g. Google SERPs and LinkedIn auth-wall pages).
         """
         html = None
 
@@ -179,6 +186,9 @@ class Crawler:
             if attempt < MAX_RETRIES - 1:
                 wait = 2 ** attempt
                 time.sleep(wait)
+
+        if not use_playwright_fallback:
+            return html
 
         # If we got HTML, check if it's JS-heavy
         if html:
@@ -590,8 +600,9 @@ class Crawler:
 
     def _linkedin_via_direct_fetch(self, linkedin_url: str) -> Optional[Dict[str, Any]]:
         """Try fetching the LinkedIn company page directly. Often returns auth-wall HTML,
-        but meta tags / og:description usually contain employee count regardless."""
-        html = self._crawl_with_retry(linkedin_url)
+        but meta tags / og:description usually contain employee count regardless.
+        Playwright fallback is disabled — it just renders the same auth wall."""
+        html = self._crawl_with_retry(linkedin_url, use_playwright_fallback=False)
         if not html:
             return None
 
@@ -619,11 +630,13 @@ class Crawler:
         }
 
     def _linkedin_via_google(self, company_name: str) -> Optional[Dict[str, Any]]:
-        """Scrape Google search results for `site:linkedin.com/company "{name}"`."""
+        """Scrape Google search results for `site:linkedin.com/company "{name}"`.
+        Playwright fallback is disabled — running headless Chromium against Google
+        with no cookies/profile triggers more anti-bot heuristics than static fetch."""
         query = quote_plus(f'site:linkedin.com/company "{company_name}"')
         search_url = f"https://www.google.com/search?q={query}&hl=en"
 
-        html = self._crawl_with_retry(search_url)
+        html = self._crawl_with_retry(search_url, use_playwright_fallback=False)
         if not html:
             return None
 
