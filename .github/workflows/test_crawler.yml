@@ -1,7 +1,7 @@
-name: Test News Crawler (ROADMAP #1B)
+name: Test Crawler Sources (News + LinkedIn)
 
-# Manual-only. Prints news fetch results for the given input(s) to the workflow log.
-# Does not write to DB, does not call Claude, does not send email.
+# Manual-only. Tests the news (#1B) and LinkedIn (#1C) crawlers and prints results
+# to the workflow log. Does not write to DB, does not call Claude, does not send email.
 
 on:
   workflow_dispatch:
@@ -10,13 +10,26 @@ on:
         description: 'Optional: test a single arbitrary name (e.g. "Slack"). If set, business_id is ignored.'
         required: false
         type: string
-      business_id:
-        description: 'Optional: UUID of a business to restrict to. If both inputs are blank, tests all active competitors across all businesses.'
+      linkedin_url:
+        description: 'Optional (with competitor_name): override LinkedIn URL — tests the direct-fetch path. Ignored in DB mode.'
         required: false
         type: string
+      business_id:
+        description: 'Optional: UUID of a business to restrict DB mode to. If competitor_name and business_id are both blank, tests all active competitors across all businesses.'
+        required: false
+        type: string
+      only:
+        description: 'Optional: restrict to a single source.'
+        required: false
+        type: choice
+        options:
+          - both
+          - news
+          - linkedin
+        default: both
 
 jobs:
-  test-news:
+  test-crawler:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -33,7 +46,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run news test
+      - name: Run crawler test
         env:
           # Only required when no competitor_name is supplied (DB mode)
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -46,11 +59,22 @@ jobs:
         run: |
           set -e
           NAME="${{ github.event.inputs.competitor_name }}"
+          LI_URL="${{ github.event.inputs.linkedin_url }}"
           BUSINESS_ID="${{ github.event.inputs.business_id }}"
+          ONLY="${{ github.event.inputs.only }}"
+
+          ARGS=()
           if [ -n "$NAME" ]; then
-            python -m scripts.test_news "$NAME"
+            ARGS+=("$NAME")
+            if [ -n "$LI_URL" ]; then
+              ARGS+=(--linkedin-url "$LI_URL")
+            fi
           elif [ -n "$BUSINESS_ID" ]; then
-            python -m scripts.test_news --business-id "$BUSINESS_ID"
-          else
-            python -m scripts.test_news
+            ARGS+=(--business-id "$BUSINESS_ID")
           fi
+
+          if [ "$ONLY" = "news" ] || [ "$ONLY" = "linkedin" ]; then
+            ARGS+=(--only "$ONLY")
+          fi
+
+          python -m scripts.test_crawler "${ARGS[@]}"
