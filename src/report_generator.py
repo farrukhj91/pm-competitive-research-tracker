@@ -196,25 +196,79 @@ Important rules:
 - Strategic recommendations must be actionable for {business.get('name')}'s product team
 """
 
-        try:
-            message = client.messages.create(
-                model="claude-opus-4-7",
-                max_tokens=8000,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            response_text = message.content[0].text.strip()
+        # Try multiple model names for resilience to API renames / SDK age
+        model_candidates = [
+            "claude-opus-4-7",
+            "claude-opus-4-5",
+            "claude-sonnet-4-7",
+            "claude-sonnet-4-5",
+            "claude-3-5-sonnet-latest",
+            "claude-3-5-sonnet-20241022",
+        ]
 
+        last_error = None
+        response_text = None
+        used_model = None
+
+        for model in model_candidates:
+            try:
+                logger.info(f"Attempting Claude analysis with model: {model}")
+                message = client.messages.create(
+                    model=model,
+                    max_tokens=8000,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                response_text = message.content[0].text.strip()
+                used_model = model
+                logger.info(f"Claude analysis succeeded with model: {model} ({len(response_text)} chars)")
+                break
+            except Exception as e:
+                last_error = f"{type(e).__name__}: {str(e)[:300]}"
+                logger.warning(f"Model {model} failed: {last_error}")
+                continue
+
+        if response_text is None:
+            error_detail = last_error or "All model candidates failed"
+            logger.error(f"Failed to generate comprehensive analysis: {error_detail}")
+            return {
+                "executive_overview": (
+                    f"⚠️ Analysis generation failed for {len(competitors)} competitors.\n\n"
+                    f"**Error:** {error_detail}\n\n"
+                    f"This is a fallback message — the full SWOT, comparison matrix, and "
+                    f"strategic recommendations could not be generated. Most common causes:\n"
+                    f"1. Claude API credits depleted (top up at console.anthropic.com)\n"
+                    f"2. Model name `claude-opus-4-7` not recognized — SDK may need upgrade\n"
+                    f"3. API key missing or invalid\n\n"
+                    f"Tried these models in order: {', '.join(model_candidates)}"
+                ),
+                "market_positioning": {},
+                "comparison_matrix": [],
+                "swot": {},
+                "market_gaps": [],
+                "strategic_recommendations": [],
+            }
+
+        try:
             # Strip markdown if present
             if "```json" in response_text:
                 response_text = response_text.split("```json")[1].split("```")[0].strip()
             elif "```" in response_text:
                 response_text = response_text.split("```")[1].split("```")[0].strip()
 
-            return json.loads(response_text)
-        except Exception as e:
-            logger.error(f"Failed to generate comprehensive analysis: {e}")
+            result = json.loads(response_text)
+            logger.info(f"Successfully parsed analysis from {used_model}: "
+                        f"{len(result.get('comparison_matrix', []))} matrix entries, "
+                        f"{len(result.get('swot', {}))} SWOTs, "
+                        f"{len(result.get('strategic_recommendations', []))} recommendations")
+            return result
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parse failed (model={used_model}): {e}; response head: {response_text[:500]}")
             return {
-                "executive_overview": f"Initial baseline crawl completed for {len(competitors)} competitors. Future reports will track changes.",
+                "executive_overview": (
+                    f"⚠️ Claude returned a response with model `{used_model}` but it was not valid JSON.\n\n"
+                    f"**Parse error:** {str(e)[:200]}\n\n"
+                    f"**Response preview (first 500 chars):**\n{response_text[:500]}"
+                ),
                 "market_positioning": {},
                 "comparison_matrix": [],
                 "swot": {},
