@@ -106,66 +106,372 @@ https://news.google.com/rss/search?q={competitor_name}&hl=en-US&gl=US&ceid=US:en
 
 ---
 
-### #2 — Web Dashboard (React UI)
+### #2 — Web Dashboard & SaaS Foundation (React UI + Pricing)
 
-**Goal:** Replace SQL-based business management with a real web app. Foundation for the multi-business workflow (#3).
+**Goal:** Replace SQL-based management with a production SaaS web app. Support free signups + paid tiers, laying groundwork for Slack notifications (#6) and API integrations (#5).
+
+#### Business Model & Pricing
+
+**Cost Analysis (per active business per month):**
+- Supabase database: $0.05 (shared storage/API)
+- Claude API for initial analysis: $0.50 (one-time per business)
+- Claude API for daily diffs: $0.15 (daily crawl with lightweight analysis)
+- Resend email: $0.00 (free tier 100/day)
+- GitHub Actions: $0.00 (free tier includes 2000 min/month; 10 min/crawl = 300 min/month)
+- Vercel: $0.00 (free tier, generous bandwidth)
+- **Total cost per active business:** ~$0.70/month (highly favorable unit economics)
+
+**Recommended Tier Structure:**
+
+| Tier | Price | Businesses | Key Features | Target Users |
+|------|-------|-----------|--------------|--------------|
+| **Free** | $0 | 1 | Daily crawls, email reports, manual triggers | Solo users, evaluators |
+| **Pro** | $29.99/mo | Unlimited | ☝️ + Slack notifications, webhooks, API, priority crawls | SMB competitive analysts |
+| **Enterprise** | Custom | Unlimited | ☝️ + SSO, team seats, SLA, dedicated support | Large orgs, agencies |
+
+**Rationale:**
+- Free tier acquires users and validates product-market fit
+- Pro at $29.99 is **40% cheaper than Semrush competitive intelligence** ($99/mo) and **25% cheaper than Kompyte** ($39/mo) — strong positioning
+- Unit economics are favorable even at $29.99 (30x cost coverage after infrastructure)
+- Slack notifications + webhooks are Pro features; this justifies the price point
+- Enterprise tier opens door to high-revenue customers (agencies, large enterprises willing to pay $100-500/mo)
+
+**Billing & Auth:**
+- Use Stripe for subscriptions (integration in Phase 3.5)
+- Supabase Auth handles user registration + password reset
+- Each user has their own account and businesses
 
 #### Tech Stack
-- **Framework:** Next.js 14 (App Router) — combines frontend + API routes
-- **Hosting:** Vercel (free tier, generous limits)
-- **Auth:** Supabase Auth (email magic link)
-- **Database:** Existing Supabase project
-- **Styling:** Tailwind CSS + shadcn/ui components
 
-#### Why Next.js?
-- Single deployment (frontend + API in one repo/host)
-- Vercel free tier is generous (100GB bandwidth/month)
-- Easy to add custom domain later (#5)
-- Server Components reduce client bundle
-- API routes can trigger GitHub Actions workflows via dispatch
+- **Framework:** Next.js 14 (App Router) — single deployment for frontend + API routes
+- **Hosting:** Vercel (free tier sufficient for MVP, auto-scales)
+- **Auth:** Supabase Auth (email magic link + password) — free, no extra cost
+- **Database:** Existing Supabase (no new instance needed)
+- **Styling:** Tailwind CSS + shadcn/ui (professional, consistent UI)
+- **Notifications:** SendGrid (email templates) + Slack SDK (scheduled for #6)
+- **Payments:** Stripe (Phase 3.5)
 
 #### Repo Structure
-Create a SEPARATE repo `competitive-tracker-web` (Next.js app) that talks to the existing Python crawler's Supabase DB. This keeps concerns clean:
-- `pm-competitive-research-tracker` (existing) — Python crawler, scheduler
-- `competitive-tracker-web` (new) — Next.js dashboard
 
-#### Pages
-- `/` — Landing/login (Supabase Auth)
-- `/dashboard` — list of businesses being tracked
-- `/dashboard/businesses/new` — onboarding wizard (#3)
-- `/dashboard/businesses/[id]` — single business view: competitors list, recent reports, settings
-- `/dashboard/businesses/[id]/reports/[reportId]` — view a specific report
-- `/dashboard/businesses/[id]/competitors` — manage competitors (add/edit/remove/pause)
-- `/dashboard/settings` — user settings, email preferences
+Create a SEPARATE repo `competitive-tracker-web` (Next.js full-stack app):
+```
+competitive-tracker-web/
+├── app/                           # Next.js App Router
+│   ├── (auth)/                    # Auth pages (layout group)
+│   │   ├── login/page.tsx
+│   │   ├── signup/page.tsx
+│   │   └── confirm/page.tsx       # Email confirmation
+│   ├── (dashboard)/               # Protected dashboard routes (layout group)
+│   │   ├── dashboard/page.tsx     # Businesses list
+│   │   ├── businesses/[id]/page.tsx    # Single business view
+│   │   ├── businesses/[id]/competitors/page.tsx
+│   │   ├── businesses/[id]/reports/[reportId]/page.tsx
+│   │   ├── settings/page.tsx      # User settings + billing
+│   │   └── layout.tsx             # Dashboard layout with sidebar
+│   ├── api/                       # API routes
+│   │   ├── auth/
+│   │   │   ├── signup/route.ts
+│   │   │   ├── login/route.ts
+│   │   │   └── logout/route.ts
+│   │   ├── businesses/
+│   │   │   ├── route.ts           # GET (list), POST (create)
+│   │   │   └── [id]/
+│   │   │       ├── route.ts       # GET (single)
+│   │   │       ├── crawl/route.ts # POST (trigger GitHub Actions)
+│   │   │       ├── crawl-status/route.ts # GET (polling for progress)
+│   │   │       └── research/route.ts # POST (Claude competitor research, #3)
+│   │   ├── competitors/route.ts   # POST (add/edit/remove)
+│   │   └── reports/[id]/route.ts  # GET (fetch HTML)
+│   ├── page.tsx                   # Landing page (public)
+│   └── layout.tsx                 # Root layout
+├── components/
+│   ├── auth/
+│   │   ├── SignupForm.tsx
+│   │   └── LoginForm.tsx
+│   ├── dashboard/
+│   │   ├── BusinessCard.tsx
+│   │   ├── CompetitorRow.tsx
+│   │   ├── ReportViewer.tsx       # HTML sanitizer + renderer
+│   │   ├── ReportTimeline.tsx
+│   │   ├── CrawlProgressModal.tsx # Live polling with progress bar
+│   │   └── BusinessSelector.tsx
+│   ├── modals/
+│   │   ├── AddCompetitorModal.tsx
+│   │   ├── EditCompetitorModal.tsx
+│   │   └── ConfirmDeleteModal.tsx
+│   └── common/
+│       ├── LoadingState.tsx
+│       ├── EmptyState.tsx
+│       └── Nav.tsx
+├── lib/
+│   ├── supabase.ts               # Supabase client initialization
+│   ├── auth.ts                   # Auth helpers
+│   ├── api.ts                    # API request utilities
+│   └── github.ts                 # GitHub Actions trigger
+├── middleware.ts                  # Auth middleware (protect /dashboard)
+├── .env.local                     # Environment variables
+└── package.json
+```
+
+**Existing Python repo structure (no changes needed):**
+```
+pm-competitive-research-tracker/
+├── src/
+│   ├── crawler.py
+│   ├── scheduler.py               # UPDATE: accept --business-id parameter
+│   ├── report_generator.py
+│   ├── diff.py
+│   ├── email_sender.py
+│   └── ...
+├── .github/workflows/
+│   └── daily_crawl.yml            # UPDATE: accept inputs.business_id
+└── ...
+```
+
+#### Database Schema Changes
+
+Add to Supabase (enables multi-user support):
+
+```sql
+-- Add user tracking to businesses (auth.users.id from Supabase Auth)
+ALTER TABLE businesses 
+ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
+
+-- Add pricing tier tracking
+ALTER TABLE businesses 
+ADD COLUMN IF NOT EXISTS tier VARCHAR(50) DEFAULT 'free' CHECK (tier IN ('free', 'pro', 'enterprise'));
+
+-- Track subscription info
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  stripe_subscription_id VARCHAR(255),
+  tier VARCHAR(50) NOT NULL,
+  status VARCHAR(50) NOT NULL, -- 'active', 'canceled', 'past_due'
+  current_period_start TIMESTAMP,
+  current_period_end TIMESTAMP,
+  created_at TIMESTAMP DEFAULT now(),
+  updated_at TIMESTAMP DEFAULT now()
+);
+
+-- Track email/Slack notification settings per business
+ALTER TABLE businesses 
+ADD COLUMN IF NOT EXISTS notifications_email BOOLEAN DEFAULT true,
+ADD COLUMN IF NOT EXISTS notifications_slack BOOLEAN DEFAULT false,
+ADD COLUMN IF NOT EXISTS slack_webhook_url VARCHAR(2048);
+
+-- Note: Don't enable RLS yet — Phase 3 adds auth enforcement
+-- For Phase 2: RLS stays disabled; filter queries by user_id in API routes
+```
+
+#### Pages & Features
+
+**Authentication Pages** (new user flow):
+- `/login` — Email + password
+- `/signup` — Register + email verification
+- `/confirm?email=...&token=...` — Verify email link
+
+**Dashboard Pages** (authenticated users only):
+- `/dashboard` — Businesses list (cards showing competitor count, last report date)
+  - Empty state: "Add your first business" CTA
+  - "+ Add Business" button
+- `/businesses/[id]` — Single business view
+  - Tabs: Overview | Competitors | Reports | Settings
+  - Overview: Recent report summary, key metrics, "Trigger Manual Crawl" button
+  - Competitors: Table with pause/resume/remove actions
+  - Reports: Timeline of past reports with links
+  - Settings: Email notifications, Slack connection (Pro only), pause business
+- `/businesses/[id]/competitors` — Competitor management page
+  - Full table view, "+ Add Competitor" button (modal)
+- `/businesses/[id]/reports/[reportId]` — Full report viewer
+  - Renders stored HTML (sanitized)
+  - Downloadable as PDF (future enhancement)
+- `/settings` — User account
+  - Email + password management
+  - Billing info (Pro/Enterprise users)
+  - Connected integrations (Slack, webhooks)
+  - Delete account option
+
+**Landing Page** (`/`):
+- Hero section: "Track your competitors in real time"
+- Feature list: Crawls 8-12 competitors daily, AI insights, Slack notifications
+- Pricing table (public)
+- Social proof: "Used by X teams" (placeholder for now)
+- CTA: "Get Started Free"
 
 #### Components
-- BusinessCard
-- CompetitorRow (with pause/edit/remove)
-- ReportViewer (renders stored HTML)
-- ReportTimeline (history)
-- AddCompetitorModal
-- ConfirmDeleteModal
 
-#### API Routes (Next.js)
-- `POST /api/businesses` — create new business
-- `GET /api/businesses` — list user's businesses
-- `POST /api/businesses/[id]/research` — kick off competitor research (calls Claude API)
-- `POST /api/businesses/[id]/crawl` — trigger immediate crawl via GitHub workflow_dispatch API
-- `POST /api/competitors` — add/edit/remove
-- `GET /api/reports/[id]` — fetch report HTML
+**Reusable UI Components:**
+1. `BusinessCard.tsx` — Summary card (name, # competitors, last report date, "View" button)
+2. `CompetitorRow.tsx` — Table row (name, URL, LinkedIn URL, status, pause/resume/remove/edit buttons)
+3. `ReportViewer.tsx` — Renders `full_report_html` with XSS sanitization (use `DOMPurify`)
+4. `ReportTimeline.tsx` — List of past reports sorted by date DESC, with links
+5. `CrawlProgressModal.tsx` — Modal showing live crawl progress (polls `/api/businesses/[id]/crawl-status` every 2-3 sec, shows progress bar + current competitor)
+6. `AddCompetitorModal.tsx` — Form to manually add competitor (name, URL, LinkedIn URL)
+7. `EditCompetitorModal.tsx` — Edit competitor details
+8. `ConfirmDeleteModal.tsx` — Generic confirmation dialog
+9. `BusinessSelector.tsx` — Dropdown in header to switch between user's businesses
+10. `LoadingState.tsx` — Skeleton loaders (Tailwind + shadcn Skeleton)
+11. `EmptyState.tsx` — Reusable empty state with CTA
 
-#### Triggering Crawls From the Dashboard
-The crawler stays in GitHub Actions (free, reliable). Dashboard triggers manual runs via GitHub's `workflow_dispatch` REST API. Requires:
-- Personal Access Token (PAT) stored as env var in Vercel
-- API call: `POST https://api.github.com/repos/farrukhj91/pm-competitive-research-tracker/actions/workflows/daily_crawl.yml/dispatches`
+#### API Routes (Next.js + TypeScript)
 
-#### Acceptance
-- User can sign in with email magic link
-- User can add a new business (triggers #3 workflow)
-- User can see all competitors, pause/resume/remove them
-- User can view past reports (stored HTML rendered inline)
-- User can trigger a manual crawl from the UI
-- Deployed to `competitive-tracker.vercel.app` (or similar)
+**Auth Routes:**
+- `POST /api/auth/signup` — Create user + Supabase auth account
+  - Body: `{ email, password }`
+  - Return: `{ user: { id, email }, session_token }`
+- `POST /api/auth/login` — Sign in
+  - Body: `{ email, password }`
+  - Return: session token
+- `POST /api/auth/logout` — Sign out (clear cookie/session)
+
+**Business Routes:**
+- `GET /api/businesses` — List user's businesses
+  - Query: `?limit=10&offset=0` (pagination)
+  - Return: `[{ id, name, url, tier, competitor_count, last_report_date }, ...]`
+  - Auth: Required (filters by `user_id`)
+- `POST /api/businesses` — Create new business
+  - Body: `{ name, url, description, tier: 'free' | 'pro' | 'enterprise' }`
+  - Validation: Free tier can only have 1 business; Pro can have unlimited
+  - Return: `{ id, name, url, tier, created_at }`
+  - Auth: Required
+- `GET /api/businesses/[id]` — Get single business + competitors + last report
+  - Return: `{ business: {...}, competitors: [...], last_report: {...} }`
+  - Auth: Required
+- `POST /api/businesses/[id]/crawl` — Trigger manual crawl via GitHub Actions
+  - Calls: `POST https://api.github.com/repos/farrukhj91/pm-competitive-research-tracker/actions/workflows/daily_crawl.yml/dispatches`
+  - Headers: `Authorization: Bearer <GITHUB_PAT>`, `Accept: application/vnd.github+json`
+  - Body: `{ ref: "main", inputs: { business_id: id } }`
+  - Return: `{ status: "queued", message: "Crawl started for 8 competitors..." }`
+  - Auth: Required
+- `GET /api/businesses/[id]/crawl-status` — Poll crawl progress
+  - Return: 
+    ```json
+    {
+      "status": "queued" | "crawling" | "completed" | "failed",
+      "started_at": "2026-05-14T10:00:00Z",
+      "completed_at": null,
+      "crawled_competitors": 3,
+      "total_competitors": 8,
+      "message": "Crawling TechCorp (3/8)...",
+      "progress_percent": 37.5
+    }
+    ```
+  - Implementation: Query `crawl_results` table for this business, count status="success"
+  - Auth: Required
+
+**Competitor Routes:**
+- `POST /api/competitors` — Add/edit/remove competitor
+  - Body: `{ business_id, action: "add" | "edit" | "remove", name?, url?, linkedin_url? }`
+  - Return: `{ success: true, competitor: {...} }`
+  - Auth: Required
+
+**Report Routes:**
+- `GET /api/reports/[id]` — Fetch report HTML
+  - Return: `{ id, report_date, summary_html, full_report_html }`
+  - Auth: Required
+- `GET /api/reports?business_id=...&limit=10` — List reports for business
+  - Return: `[{ id, report_date, ... }, ...]` (for timeline view)
+  - Auth: Required
+
+**Placeholder for Phase 3:**
+- `POST /api/businesses/[id]/research` — Kick off Claude competitor discovery
+  - (Not implemented in Phase 2; stub with 501 Not Implemented)
+
+#### Crawl Triggering & Progress Polling
+
+**Why GitHub Actions?**
+- Free (2000 min/month = 200 daily crawls @ 10 min each)
+- Reliable, proven, decoupled from dashboard
+- Easy to monitor and debug
+- Can scale to multi-tenant without cost
+
+**Workflow:**
+1. User clicks "Trigger Manual Crawl" in dashboard
+2. Frontend calls `POST /api/businesses/[id]/crawl`
+3. API calls GitHub workflow_dispatch with `business_id` parameter
+4. Python scheduler runs: `python -m src.scheduler --business-id <id>`
+5. Frontend polls `GET /api/businesses/[id]/crawl-status` every 2-3 sec
+6. Progress modal shows: "Crawling TechCorp (3/8)..." + progress bar
+7. When complete: "✅ Crawl finished. 3 new changes detected in pricing."
+
+**Python Scheduler Updates:**
+- `scheduler.py` must accept `--business-id` parameter
+- Usage: `python -m src.scheduler --business-id dab1adda-...` crawls only that business
+- Existing `--all` remains unchanged (for scheduled daily runs)
+
+**GitHub Actions Workflow Update:**
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      business_id:
+        description: 'Optional business ID to crawl (leave empty for all)'
+        required: false
+        type: string
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        ...
+      - name: Run crawl
+        run: |
+          if [ -z "${{ github.event.inputs.business_id }}" ]; then
+            python -m src.scheduler --all
+          else
+            python -m src.scheduler --business-id ${{ github.event.inputs.business_id }}
+          fi
+```
+
+#### Acceptance Criteria
+
+1. ✅ User can sign up with email, verify email, log in
+2. ✅ Free tier limited to 1 business; Pro/Enterprise show unlimited
+3. ✅ Dashboard shows list of user's businesses with card summaries
+4. ✅ Single business view shows competitors, recent report, settings
+5. ✅ User can manually add competitors (with name, URL, optional LinkedIn URL)
+6. ✅ User can pause/resume/remove competitors
+7. ✅ User can view past reports (rendered HTML, XSS-safe)
+8. ✅ User can trigger manual crawl, see live progress with polling
+9. ✅ All pages mobile-responsive (Tailwind + shadcn/ui)
+10. ✅ Deployed live on Vercel at public URL
+11. ✅ Email notifications work for free/pro tiers
+12. ✅ Pro tier can connect Slack webhook (Phase 2 scaffolding; Phase 3.5 full integration)
+
+#### Implementation Timeline
+
+**Phase 2 Detailed (14-18 hours across 2-3 sessions):**
+
+1. **Session 1: Scaffolding & Auth (5-6 hours)**
+   - Initialize Next.js 14 repo (`competitive-tracker-web`)
+   - Set up Supabase Auth (email + password)
+   - Build signup/login/logout pages + middleware
+   - Set up environment variables
+   - Create landing page with pricing table
+   - Initial GitHub commit + Vercel deployment
+
+2. **Session 2: Dashboard Pages & Components (6-8 hours)**
+   - Build business list page + BusinessCard component
+   - Build single business view (tabs: Overview | Competitors | Reports | Settings)
+   - Build competitor management page + CompetitorRow component
+   - Build report viewer page + ReportViewer component (HTML sanitization)
+   - Create all modals (AddCompetitorModal, ConfirmDeleteModal, etc.)
+   - Build CrawlProgressModal with polling logic
+   - Responsive design (mobile + desktop)
+
+3. **Session 3: API Routes & Integration (4-6 hours)**
+   - Implement all API routes (auth, businesses, competitors, reports, crawl-status)
+   - Implement GitHub Actions workflow_dispatch integration
+   - Add crawl progress polling + status tracking
+   - Database schema migration (add user_id, tier, subscriptions table)
+   - Update Python scheduler to accept --business-id
+   - End-to-end testing on Vercel
+   - Polish + deploy
+
+**Estimated total:** 14-18 hours (but can flex based on complexity discovered during implementation)
 
 ---
 
