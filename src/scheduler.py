@@ -18,8 +18,14 @@ logger = logging.getLogger(__name__)
 class Scheduler:
     """Orchestrate the entire crawl → diff → report → send workflow."""
 
-    def run_daily_crawl_for_business(self, business_id: str) -> bool:
-        """Run complete crawl cycle for a single business."""
+    def run_daily_crawl_for_business(self, business_id: str) -> str:
+        """Run complete crawl cycle for a single business.
+
+        Returns one of:
+          - "success" — crawl completed (possibly with some per-competitor errors)
+          - "skipped" — business has no competitors yet; not an error
+          - "failed"  — fatal error, the run should be flagged
+        """
         try:
             logger.info(f"Starting daily crawl for business {business_id}")
 
@@ -27,15 +33,18 @@ class Scheduler:
             business = db.get_business(business_id)
             if not business:
                 logger.error(f"Business {business_id} not found")
-                return False
+                return "failed"
 
             logger.info(f"Crawling for business: {business['name']}")
 
             # Get competitors
             competitors = db.get_competitors(business_id)
             if not competitors:
-                logger.warning(f"No competitors configured for business {business_id}")
-                return False
+                # Not a failure — onboarding in progress, business paused, or
+                # user hasn't picked competitors yet. Skip cleanly so we
+                # don't spam the GitHub Actions failure email.
+                logger.info(f"No competitors configured for business {business_id} — skipping")
+                return "skipped"
 
             logger.info(f"Found {len(competitors)} competitors")
 
@@ -123,7 +132,7 @@ class Scheduler:
 
                 if not email_sent:
                     logger.error("Failed to send report email")
-                    return False
+                    return "failed"
 
             except Exception as e:
                 logger.error(f"Error generating report: {e}")
@@ -134,14 +143,15 @@ class Scheduler:
                 logger.warning(f"Completed with {len(crawl_errors)} errors:")
                 for error in crawl_errors:
                     logger.warning(f"  - {error}")
-                # Still return true if some competitors were successful
+                # Partial success is still success; only mark failed if
+                # every competitor errored.
                 if len(crawl_errors) < len(competitors):
-                    return True
+                    return "success"
                 else:
-                    return False
+                    return "failed"
 
             logger.info(f"✓ Daily crawl completed successfully for {business['name']}")
-            return True
+            return "success"
 
         except Exception as e:
             logger.error(f"Fatal error in daily crawl: {e}")
@@ -155,23 +165,34 @@ class Scheduler:
                     )
             except Exception as email_error:
                 logger.error(f"Failed to send error notification: {email_error}")
-            return False
+            return "failed"
 
     def run_all_active_businesses(self) -> bool:
-        """Run daily crawl for all active businesses."""
+        """Run daily crawl for all active businesses.
+
+        Returns False (exit 1) only if any business actually FAILED.
+        Businesses that are skipped (no competitors) do NOT count as failure —
+        they're a normal state during onboarding.
+        """
         businesses = db.list_businesses()
         logger.info(f"Running crawls for {len(businesses)} businesses")
 
         results = {}
         for business in businesses:
-            success = self.run_daily_crawl_for_business(business['id'])
-            results[business['name']] = success
+            status = self.run_daily_crawl_for_business(business['id'])
+            results[business['name']] = status
 
         # Log summary
-        successful = sum(1 for v in results.values() if v)
-        logger.info(f"Completed: {successful}/{len(businesses)} businesses successful")
+        successful = sum(1 for v in results.values() if v == "success")
+        skipped = sum(1 for v in results.values() if v == "skipped")
+        failed = sum(1 for v in results.values() if v == "failed")
+        logger.info(
+            f"Completed: {successful} successful, {skipped} skipped, "
+            f"{failed} failed (out of {len(businesses)} businesses)"
+        )
 
-        return successful == len(businesses)
+        # Only flag the run as failed if there was a real failure
+        return failed == 0
 
     def cleanup_old_data(self):
         """Delete old crawl results (data retention)."""
@@ -198,8 +219,9 @@ def main():
     if args.cleanup:
         scheduler.cleanup_old_data()
     elif args.business_id:
-        success = scheduler.run_daily_crawl_for_business(args.business_id)
-        sys.exit(0 if success else 1)
+        status = scheduler.run_daily_crawl_for_business(args.business_id)
+        # success and skipped both mean "nothing went wrong"
+        sys.exit(1 if status == "failed" else 0)
     elif args.all:
         success = scheduler.run_all_active_businesses()
         sys.exit(0 if success else 1)
